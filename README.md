@@ -28,6 +28,6 @@ To use the skin service, you can use either the `/skin/{uuid}/{size}` endpoint, 
 
 Clone the repository into an accessible directory and build the image using `podman build -t ziria .` once that is done you can proceed with the Quadlet setup.
 
-We use Quadlets, it turns Containerfiles into easily manageable systemd services. Copy the files (`dragonfly.container`, `ziria.container`, `ziria.env`, `ziria.network`) or soft-link them to `~/.config/containers/systemd/ziria.container`. If you wish to use your own Redis-compatible K/V storage, then you can modify the ziria.container file to remove the requirements for the dragonfly container and ziria network.
+We use Quadlets, it turns Containerfiles into easily manageable systemd services. Copy the files in the `systemd` directory or soft-link them to `~/.config/containers/systemd/`. If you wish to use your own Redis-compatible K/V storage, then you can modify the ziria.container file to remove the requirements for the dragonfly container and ziria network.
 
 After copying both the environment variables and Containerfile, we can reload the daemon using `systemctl --user daemon-reload` and start the service `systemctl --user start ziria.service`. You can then verify this by checking the status of it: `systemctl --user status ziria.service`.
