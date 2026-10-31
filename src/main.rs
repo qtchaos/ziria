@@ -1,14 +1,12 @@
 use crate::types::{State, UuidOrString};
-use actix_web::{
-    get,
-    http::header::{self},
-    web::{self, ServiceConfig},
-    HttpRequest, HttpResponse, Responder,
+use axum::{
+    Router,
+    extract::{Path, State as AxumState},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::get,
 };
-use image::{imageops, DynamicImage::ImageRgb8, DynamicImage::ImageRgba8};
-use reqwest::StatusCode;
-use shuttle_actix_web::ShuttleActixWeb;
-use shuttle_secrets::SecretStore;
+use image::{DynamicImage::ImageRgb8, DynamicImage::ImageRgba8, imageops};
 use uuid::Uuid;
 
 mod bytes;
@@ -17,39 +15,35 @@ mod img;
 mod mojang;
 mod types;
 
-#[get("/")]
-async fn health() -> impl Responder {
-    HttpResponse::Ok()
+async fn health() -> &'static str {
+    "OK"
 }
 
-#[get("/clear_cache/{password}")]
-async fn clear_cache(path: web::Path<String>, data: web::Data<State>) -> impl Responder {
-    if path.into_inner() == data.clear_cache_password {
+async fn clear_cache(AxumState(data): AxumState<State>, Path(password): Path<String>) -> Response {
+    if password == data.clear_cache_password {
         let mut con = data.connection.clone();
         let _: () = redis::cmd("FLUSHALL").query_async(&mut con).await.unwrap();
-        return HttpResponse::Ok().body("Cache cleared!");
+        return "Cache cleared!".into_response();
     }
-    HttpResponse::Ok().body("Wrong password!")
+    "Wrong password!".into_response()
 }
 
-#[get("/avatar/{uuid}/{size}/{helm}")]
-async fn get_avatar(req: HttpRequest, data: web::Data<State>) -> impl Responder {
-    let info = req.match_info();
-    let uuid: UuidOrString = info.get("uuid").unwrap().parse().unwrap();
-    let size: u32 = info.get("size").unwrap().parse().unwrap();
-    let helm: bool = info.get("helm").unwrap().parse().unwrap();
+async fn get_avatar(
+    AxumState(data): AxumState<State>,
+    Path((uuid, size, helm)): Path<(String, u32, bool)>,
+) -> Response {
+    let uuid: UuidOrString = uuid.parse().unwrap();
     let identifier = cache::create_id(uuid.clone(), helm);
-    let mut con = data.connection.clone();
-    let mut response = HttpResponse::build(StatusCode::OK);
-    response.append_header((header::CONTENT_TYPE, "image/png"));
-    response.append_header((header::CACHE_CONTROL, "max-age=1200"));
-    response.append_header((header::SERVER, "Ziria"));
 
     if size > 512 || size < 8 || size % 8 != 0 {
-        return HttpResponse::build(StatusCode::BAD_REQUEST)
-            .body("Size must be between 8 and 512, and divisible by 8.");
+        return (
+            StatusCode::BAD_REQUEST,
+            "Size must be between 8 and 512, and divisible by 8.",
+        )
+            .into_response();
     }
 
+    let mut con = data.connection.clone();
     // STEP: Check if the avatar is cached, if so, load it and return it
     let key: Result<Vec<u8>, _> = cache::get(&identifier, &mut con).await;
     match key {
@@ -58,8 +52,11 @@ async fn get_avatar(req: HttpRequest, data: web::Data<State>) -> impl Responder 
             let avatar = match image::load_from_memory(&buffer) {
                 Ok(avatar) => avatar.to_rgb8(),
                 Err(_) => {
-                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body("Error loading avatar from cache!");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Error loading avatar from cache!",
+                    )
+                        .into_response();
                 }
             };
 
@@ -68,7 +65,7 @@ async fn get_avatar(req: HttpRequest, data: web::Data<State>) -> impl Responder 
                 buffer = img::encode_png(ImageRgb8(avatar));
             }
 
-            return response.body(buffer);
+            return image_response(buffer);
         }
         Err(_) => {}
     }
@@ -78,7 +75,7 @@ async fn get_avatar(req: HttpRequest, data: web::Data<State>) -> impl Responder 
         UuidOrString::String(username) => match mojang::get_uuid(username).await {
             uuid if uuid != Uuid::nil() => uuid,
             _ => {
-                return HttpResponse::build(StatusCode::NOT_FOUND).body("User not found!");
+                return (StatusCode::NOT_FOUND, "User not found!").into_response();
             }
         },
     };
@@ -86,7 +83,7 @@ async fn get_avatar(req: HttpRequest, data: web::Data<State>) -> impl Responder 
     let skin = match mojang::get_skin(uuid).await {
         Ok(skin) => skin,
         Err(_) => {
-            return HttpResponse::build(StatusCode::NOT_FOUND).body("Skin not found!");
+            return (StatusCode::NOT_FOUND, "Skin not found!").into_response();
         }
     };
 
@@ -107,20 +104,20 @@ async fn get_avatar(req: HttpRequest, data: web::Data<State>) -> impl Responder 
     if avatar.width() != size {
         avatar = img::resize(&avatar, size);
     } else {
-        return response.body(buffer);
+        return image_response(buffer);
     }
 
-    response.body(img::encode_png(ImageRgb8(avatar)))
+    image_response(img::encode_png(ImageRgb8(avatar)))
 }
 
-#[get("/skin/{uuid}/{size}")]
-async fn get_skin(req: HttpRequest) -> impl Responder {
-    let info = req.match_info();
-    let uuid = info.get("uuid").unwrap().parse::<UuidOrString>().unwrap();
-    let size = info.get("size").unwrap().parse::<u32>().unwrap();
+async fn get_skin(Path((uuid, size)): Path<(String, u32)>) -> Response {
+    let uuid: UuidOrString = uuid.parse().unwrap();
     if size > 512 || size < 64 || size % 64 != 0 {
-        return HttpResponse::build(StatusCode::BAD_REQUEST)
-            .body("Size must be between 64 and 512, and divisible by 64.");
+        return (
+            StatusCode::BAD_REQUEST,
+            "Size must be between 64 and 512, and divisible by 64.",
+        )
+            .into_response();
     }
 
     let uuid = match uuid {
@@ -128,7 +125,7 @@ async fn get_skin(req: HttpRequest) -> impl Responder {
         UuidOrString::String(username) => match mojang::get_uuid(username).await {
             uuid if uuid != Uuid::nil() => uuid,
             _ => {
-                return HttpResponse::build(StatusCode::NOT_FOUND).body("User not found!");
+                return (StatusCode::NOT_FOUND, "User not found!").into_response();
             }
         },
     };
@@ -136,11 +133,15 @@ async fn get_skin(req: HttpRequest) -> impl Responder {
     let skin = match mojang::get_skin(uuid).await {
         Ok(skin) => skin,
         Err(_) => {
-            return HttpResponse::build(StatusCode::NOT_FOUND)
-                .append_header((header::SERVER, "Ziria"))
-                .append_header((header::CACHE_CONTROL, "max-age=1200"))
-                .append_header((header::CONTENT_TYPE, "text/plain"))
-                .body("Skin not found!");
+            return (
+                StatusCode::NOT_FOUND,
+                [
+                    (header::SERVER, "Ziria"),
+                    (header::CACHE_CONTROL, "max-age=1200"),
+                ],
+                "Skin not found!",
+            )
+                .into_response();
         }
     };
 
@@ -151,22 +152,17 @@ async fn get_skin(req: HttpRequest) -> impl Responder {
     }
 
     let buffer = img::encode_png(ImageRgba8(skin));
-    HttpResponse::build(StatusCode::OK)
-        .content_type(header::ContentType("image/png".parse().unwrap()))
-        .insert_header(("Cache-Control", "max-age=1200"))
-        .body(buffer)
+    image_response(buffer)
 }
 
-#[get("/skin/{uuid}")]
-async fn get_skin_64(req: HttpRequest) -> impl Responder {
-    let info = req.match_info();
-    let uuid = info.get("uuid").unwrap().parse::<UuidOrString>().unwrap();
+async fn get_skin_64(Path(uuid): Path<String>) -> Response {
+    let uuid: UuidOrString = uuid.parse().unwrap();
     let uuid = match uuid {
         UuidOrString::Uuid(uuid) => uuid,
         UuidOrString::String(username) => match mojang::get_uuid(username).await {
             uuid if uuid != Uuid::nil() => uuid,
             _ => {
-                return HttpResponse::build(StatusCode::NOT_FOUND).body("User not found!");
+                return (StatusCode::NOT_FOUND, "User not found!").into_response();
             }
         },
     };
@@ -174,44 +170,68 @@ async fn get_skin_64(req: HttpRequest) -> impl Responder {
     let skin = match mojang::get_skin(uuid).await {
         Ok(skin) => skin,
         Err(_) => {
-            return HttpResponse::build(StatusCode::NOT_FOUND).body("Skin not found!");
+            return (StatusCode::NOT_FOUND, "Skin not found!").into_response();
         }
     };
 
     let skin = image::load_from_memory(&skin).unwrap().to_rgba8();
 
     let buffer = img::encode_png(ImageRgba8(skin));
-    HttpResponse::build(StatusCode::OK)
-        .content_type(header::ContentType("image/png".parse().unwrap()))
-        .insert_header(("Cache-Control", "max-age=1200"))
-        .body(buffer)
+    image_response(buffer)
 }
 
-#[shuttle_runtime::main]
-async fn main(
-    #[shuttle_secrets::Secrets] secret: SecretStore,
-) -> ShuttleActixWeb<impl FnOnce(&mut ServiceConfig) + Send + Clone + 'static> {
+fn image_response(body: Vec<u8>) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "max-age=1200"),
+            (header::SERVER, "Ziria"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+#[tokio::main]
+async fn main() {
+    dotenvy::dotenv().ok();
     let connection_string = format!(
         "{}://{}:{}@{}:{}/",
-        secret.get("REDIS_SCHEME").unwrap(),
-        secret.get("REDIS_USERNAME").unwrap(),
-        secret.get("REDIS_PASSWORD").unwrap(),
-        secret.get("REDIS_HOST").unwrap(),
-        secret.get("REDIS_PORT").unwrap()
+        std::env::var("REDIS_SCHEME").expect("REDIS_SCHEME is required"),
+        std::env::var("REDIS_USERNAME").expect("REDIS_USERNAME is required"),
+        std::env::var("REDIS_PASSWORD").expect("REDIS_PASSWORD is required"),
+        std::env::var("REDIS_HOST").expect("REDIS_HOST is required"),
+        std::env::var("REDIS_PORT").expect("REDIS_PORT is required"),
     );
+
     let client = redis::Client::open(connection_string).unwrap();
     let con = client.get_multiplexed_async_connection().await.unwrap();
-    let config = move |cfg: &mut ServiceConfig| {
-        cfg.service(health)
-            .service(clear_cache)
-            .service(get_avatar)
-            .service(get_skin)
-            .service(get_skin_64)
-            .app_data(web::Data::new(State {
-                connection: con.clone(),
-                clear_cache_password: secret.get("CLEAR_CACHE_PASSWORD").unwrap(),
-            }));
+    let state = State {
+        connection: con,
+        clear_cache_password: std::env::var("CLEAR_CACHE_PASSWORD")
+            .expect("CLEAR_CACHE_PASSWORD is required"),
     };
 
-    Ok(config.into())
+    let app = Router::new()
+        .route("/", get(health))
+        .route("/clear_cache/{password}", get(clear_cache))
+        .route("/avatar/{uuid}/{size}/{helm}", get(get_avatar))
+        .route("/skin/{uuid}/{size}", get(get_skin))
+        .route("/skin/{uuid}", get(get_skin_64))
+        .with_state(state);
+
+    let port = std::env::args()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|args| args[0] == "--port")
+        .map(|args| args[1].clone())
+        .or_else(|| std::env::var("PORT").ok())
+        .unwrap_or_else(|| "8000".to_string());
+
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .expect("failed to bind listener");
+
+    axum::serve(listener, app).await.expect("server failed");
 }

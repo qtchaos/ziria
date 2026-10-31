@@ -37,6 +37,7 @@ impl IsEmpty for Vec<u8> {
     }
 }
 
+#[derive(Clone)]
 pub struct State {
     pub connection: MultiplexedConnection,
     pub clear_cache_password: String,

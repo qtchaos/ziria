@@ -42,9 +42,10 @@ pub fn create_id(uuid: UuidOrString, helm: bool) -> String {
             return identifier;
         }
         UuidOrString::String(username) => {
+            let name_len = username.len();
             let identifier = format!(
                 "{}-{}",
-                username[0..username.len() - 3].to_string() + username.len().to_string().as_str(),
+                username[0..name_len - 3].to_string() + name_len.to_string().as_str(),
                 helm.to_string()[0..1].to_string()
             );
             return identifier;

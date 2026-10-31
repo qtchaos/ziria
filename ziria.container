@@ -1,0 +1,18 @@
+[Unit]
+Description=Minecraft avatar service
+Requires=dragonfly.service
+After=network-online.target dragonfly.service
+
+[Container]
+Image=localhost/ziria:latest
+Network=ziria.network
+EnvironmentFile=%h/.config/containers/systemd/ziria.env
+PublishPort=127.0.0.1:8000:8000
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

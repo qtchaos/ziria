@@ -1,0 +1,13 @@
+[Unit]
+Description=Dragonfly cache for Ziria
+
+[Container]
+Image=docker.dragonflydb.io/dragonflydb/dragonfly:latest
+Network=ziria.network
+NetworkAlias=dragonfly
+Exec=--cache_mode=true --maxmemory=512mb --proactor_threads=1
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=600

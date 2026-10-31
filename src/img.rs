@@ -1,6 +1,6 @@
 use std::vec;
 
-use image::{codecs::png::PngEncoder, imageops, ImageBuffer, ImageEncoder, Pixel, Rgb};
+use image::{ImageBuffer, ImageEncoder, Pixel, Rgb, codecs::png::PngEncoder, imageops};
 
 pub fn crop(
     image: Vec<u8>,

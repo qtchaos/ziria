@@ -1,5 +1,5 @@
 use crate::types::{DecodedProperty, MojangProfile};
-use base64::{engine::general_purpose, Engine};
+use base64::{Engine, engine::general_purpose};
 use uuid::Uuid;
 
 pub async fn get_skin(uuid: Uuid) -> Result<Vec<u8>, &'static str> {
